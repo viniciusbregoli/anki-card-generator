@@ -28,10 +28,10 @@ HEADERS = {"x-card-generator": "1"}
 
 def _items(kind: str, first: int, last: int) -> list[dict]:
     if kind == "words":
-        rows = json.loads((DATA / "frequency/core-words.json").read_text())
+        rows = json.loads((DATA / "frequency/core-words.json").read_text(encoding="utf-8"))
         return [{"rank": r["deck_rank"], "text": r["lemma"], "hint": r["english"], "kind": None,
                  "tags": ["core-words", _band(r["deck_rank"])]} for r in rows[first - 1 : last]]
-    rows = json.loads((DATA / "frequency/phrases.json").read_text())
+    rows = json.loads((DATA / "frequency/phrases.json").read_text(encoding="utf-8"))
     return [{"rank": r["rank"], "text": r["german"], "kind": "phrase",
              "hint": r["english"] + (f" ({r['note']})" if r["note"] else ""),
              "tags": ["core-phrases", f"phrase-tier::{r['tier']}"]} for r in rows[first - 1 : last]]
@@ -45,6 +45,12 @@ def _band(rank: int) -> str:
 
 def draft(kind: str, first: int, last: int, http: httpx.Client) -> Path:
     def one(item: dict) -> dict:
+        try:
+            return _draft_one(item)
+        except Exception as e:  # one bad answer must not lose the rest of the batch
+            return {**item, "error": f"{type(e).__name__}: {e}"}
+
+    def _draft_one(item: dict) -> dict:
         body = {"text": item["text"], "hint": item["hint"], "review": True,
                 **({"kind": item["kind"]} if item["kind"] else {})}
         for _ in range(2):  # a draft that still lacks examples is drafted again
@@ -61,7 +67,7 @@ def draft(kind: str, first: int, last: int, http: httpx.Client) -> Path:
         rows = list(pool.map(one, _items(kind, first, last)))
     out = DATA / "batches" / f"{kind}-{first:04d}-{last:04d}.json"
     out.parent.mkdir(exist_ok=True)
-    out.write_text(json.dumps(rows, ensure_ascii=False, indent=1))
+    out.write_text(json.dumps(rows, ensure_ascii=False, indent=1), encoding="utf-8")
     for row in rows:
         _print(row)
     return out
@@ -99,20 +105,25 @@ def _print(row: dict) -> None:
 
 def save(name: str, http: httpx.Client) -> None:
     path = DATA / "batches" / f"{name}.json"
-    rows = json.loads(path.read_text())
+    rows = json.loads(path.read_text(encoding="utf-8"))
     for row in rows:
         if "error" in row or row.get("saved"):
             continue
         if row["duplicates"]:
             print(f"{row['rank']:>4} {row['draft']['lemma']}: skipped, already in the collection")
             continue
-        r = http.post(f"{API}/api/notes", json={"draft": row["draft"]})
+        try:
+            r = http.post(f"{API}/api/notes", json={"draft": row["draft"]})
+        except httpx.TransportError as e:  # not retried: the note may have been added anyway
+            print(f"{row['rank']:>4} {row['draft']['lemma']}: ERROR {type(e).__name__}: {e} "
+                  "(check the collection before saving this batch again)")
+            continue
         if r.status_code != 201:
             print(f"{row['rank']:>4} {row['draft']['lemma']}: ERROR {r.text[:300]}")
             continue
         row["saved"] = r.json()["id"]
         print(f"{row['rank']:>4} {row['draft']['lemma']}: saved ({r.json()['audio']} audio)")
-        path.write_text(json.dumps(rows, ensure_ascii=False, indent=1))  # a rerun skips saved rows
+        path.write_text(json.dumps(rows, ensure_ascii=False, indent=1), encoding="utf-8")  # a rerun skips saved rows
 
 
 def main(argv: list[str] | None = None) -> int:

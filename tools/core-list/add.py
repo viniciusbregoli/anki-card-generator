@@ -4,7 +4,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."
 from card_generator.clients import TextModel
 D = os.environ.get("CORE_LIST_DATA", "data/frequency").rstrip("/") + "/"  # the lists and source files
 text = TextModel(os.environ["OPENROUTER_API_KEY"], "openai/gpt-6-luna", reasoning="medium")
-miss = json.load(open("/tmp/freq/work/goethe_missing.json"))
+miss = json.load(open(D + "goethe_missing.json"))  # Goethe A1/A2 words missing from the frequency list
 words = [(w, lv) for lv in ("A1", "A2") for w in miss[lv]]
 SYSTEM = """These words come from the official Goethe A1/A2 vocabulary lists but are missing from a
 frequency-based core list (film subtitles and newspapers rank concrete daily-life words too low). The

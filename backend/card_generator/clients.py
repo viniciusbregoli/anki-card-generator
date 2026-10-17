@@ -24,6 +24,8 @@ def _error_text(r: httpx.Response) -> str:
         data = r.json()
     except ValueError:
         return r.text[:300] or r.reason_phrase
+    if not isinstance(data, dict):  # valid JSON need not be an object
+        return json.dumps(data, ensure_ascii=False)[:300]
     detail = data.get("error") or data.get("detail") or data
     if isinstance(detail, dict):
         detail = detail.get("message") or json.dumps(detail)[:300]
@@ -51,24 +53,33 @@ class TextModel:
         """One chat completion constrained to `schema`; returns the parsed object."""
         if not self.api_key:
             raise UpstreamError("OPENROUTER_API_KEY is not set.", 503, "not_configured")
-        r = self._http.post(
-            self.URL,
-            headers={"Authorization": f"Bearer {self.api_key}", "X-Title": "anki-card-generator"},
-            json={
-                "model": self.model,
-                "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}],
-                "response_format": {
-                    "type": "json_schema",
-                    "json_schema": {"name": name, "strict": True, "schema": schema},
+        try:
+            r = self._http.post(
+                self.URL,
+                headers={"Authorization": f"Bearer {self.api_key}", "X-Title": "anki-card-generator"},
+                json={
+                    "model": self.model,
+                    "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}],
+                    "response_format": {
+                        "type": "json_schema",
+                        "json_schema": {"name": name, "strict": True, "schema": schema},
+                    },
+                    "reasoning": {"effort": reasoning or self.reasoning},
                 },
-                "reasoning": {"effort": reasoning or self.reasoning},
-            },
-        )
+            )
+        except httpx.HTTPError as exc:
+            raise UpstreamError(f"Text model is unreachable ({exc}).") from exc
         if r.status_code != 200:
             raise UpstreamError(f"Text model error: {_error_text(r)}")
-        body = r.json()
-        if body.get("error"):
-            raise UpstreamError(f"Text model error: {body['error'].get('message', body['error'])}")
+        try:
+            body = r.json()
+        except ValueError as exc:
+            raise UpstreamError(f"Text model returned a non-JSON answer: {r.text[:200]}") from exc
+        if not isinstance(body, dict):
+            raise UpstreamError(f"Text model returned an unexpected answer: {str(body)[:200]}")
+        if error := body.get("error"):
+            message = error.get("message", error) if isinstance(error, dict) else error
+            raise UpstreamError(f"Text model error: {message}")
         try:
             return json.loads(body["choices"][0]["message"]["content"])
         except (KeyError, IndexError, TypeError, json.JSONDecodeError) as exc:
@@ -119,12 +130,15 @@ class Speech:
         if not self.configured:
             raise UpstreamError("ELEVENLABS_API_KEY is not set.", 503, "not_configured")
         for attempt in range(3):
-            r = self._http.post(
-                self.URL.format(voice=self.voice_id),
-                params={"output_format": "mp3_44100_128"},
-                headers={"xi-api-key": self.api_key or ""},
-                json={"text": text, "model_id": self.model, "language_code": language},
-            )
+            try:
+                r = self._http.post(
+                    self.URL.format(voice=self.voice_id),
+                    params={"output_format": "mp3_44100_128"},
+                    headers={"xi-api-key": self.api_key or ""},
+                    json={"text": text, "model_id": self.model, "language_code": language},
+                )
+            except httpx.HTTPError as exc:
+                raise UpstreamError(f"Speech service is unreachable ({exc}).") from exc
             # 429: too many requests at once for the plan's concurrency limit.
             if r.status_code != 429 or attempt == 2:
                 break
@@ -156,8 +170,9 @@ class AnkiManager:
             code = None
             try:
                 body = r.json()
-                detail = body.get("detail")
-                code = body.get("code") or (detail.get("code") if isinstance(detail, dict) else None)
+                if isinstance(body, dict):
+                    detail = body.get("detail")
+                    code = body.get("code") or (detail.get("code") if isinstance(detail, dict) else None)
             except ValueError:
                 pass
             status = r.status_code if r.status_code in (400, 404, 409) else 502

@@ -61,12 +61,23 @@ seen, unique = set(), []
 for it in sorted(items, key=lambda x: x["tier"]):
     if norm(it["german"]) not in seen:
         seen.add(norm(it["german"])); unique.append(it)
+# Keep the generated list before the last request, so a failure there loses no generation work.
+json.dump(unique, open(D + "phrases-generated.json", "w"), ensure_ascii=False, indent=0)
 # One pass over the whole list for near-duplicates ("Wie geht's?" / "Wie geht es dir?").
 listing = "\n".join(f"{i}\t{x['german']}" for i, x in enumerate(unique))
-dup = text.json(LEARNER + "\nBelow is a phrase list. List the indexes of entries that are near-duplicates "
+def find_duplicates():
+    return text.json(LEARNER + "\nBelow is a phrase list. List the indexes of entries that are near-duplicates "
                 "of an earlier entry (same expression with trivial variation). Keep genuinely different uses.",
                 listing, {"type": "object", "additionalProperties": False, "required": ["drop"],
                           "properties": {"drop": {"type": "array", "items": {"type": "integer"}}}}, "dups")["drop"]
+for attempt in range(3):
+    try:
+        dup = find_duplicates()
+        break
+    except Exception as e:  # transient model or network error: try again
+        if attempt == 2:
+            raise
+        print("duplicate check failed, retrying:", e)
 final = [x for i, x in enumerate(unique) if i not in set(dup)]
 final.sort(key=lambda x: x["tier"])
 for i, x in enumerate(final, 1):

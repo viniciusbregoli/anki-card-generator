@@ -17,7 +17,10 @@ ALIAS = {"bitte": "bitten", "danke": "danken", "möchten": "mögen", "später": 
 BOOST = 3  # corpora underrate concrete daily-life words
 
 def key(lemma):
-    return re.sub(r"^sich ", "", lemma).lower()
+    """One entry per word: "sich" and casing variants merge, but a noun stays apart from the
+    verb or adjective spelled the same (das Leben / leben, der Arm / arm)."""
+    bare = re.sub(r"^sich ", "", lemma)
+    return bare if bare[:1].isupper() else bare.lower()
 
 items = {}
 def add(lemma, english, everyday, score, source):
@@ -35,8 +38,9 @@ for x in cleaned:
 unscored = []
 for x in adds:
     if not x["keep"]: continue
-    sc = max(low.get(x["lemma"].lower(), 0), low.get(key(x["lemma"]), 0), low.get(x["source"].lower(), 0),
-             low.get(ALIAS.get(x["lemma"], "-"), 0))
+    # The exact lemma's own score first, so "leben" does not borrow the score of "Leben".
+    sc = scores.get(x["lemma"]) or scores.get(key(x["lemma"])) or max(
+        low.get(x["lemma"].lower(), 0), low.get(x["source"].lower(), 0), low.get(ALIAS.get(x["lemma"], "-"), 0))
     if not sc: unscored.append(x["lemma"])
     add(x["lemma"], x["english"], True, sc, f'Goethe {x["goethe"]}')
 # Feminine forms (Kollegin) when the masculine is in the list: the noun card can mention both.
@@ -45,8 +49,11 @@ for k in [k for k in items if k.endswith("in") and items[k]["lemma"][0].isupper(
         items.pop(k)
 ranked = sorted(items.values(), key=lambda x: -x["score"])
 # Greetings and politeness come first whatever the corpora say ("tschüss" is rare in print).
-PIN = ["hallo", "tschüss", "danke", "bitte", "entschuldigung", "okay"]
-for k in PIN:
+PIN = ["hallo", "tschüss", "danke", "bitte", "Entschuldigung", "okay"]
+for k in map(key, PIN):
+    if k not in items:  # dropped upstream: nothing to pin
+        print("pinned word missing from the list:", k)
+        continue
     items[k]["score"] = max(items[k]["score"], ranked[120]["score"])
 ranked = sorted(items.values(), key=lambda x: -x["score"])
 floor = ranked[1500]["score"]
