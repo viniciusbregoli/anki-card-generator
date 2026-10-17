@@ -1,0 +1,23 @@
+@import "tailwindcss";
+
+@theme {
+  --font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  /* Article colours, the same as on the Anki cards. */
+  --color-der: oklch(0.55 0.2 260);
+  --color-die: oklch(0.58 0.21 27);
+  --color-das: oklch(0.6 0.16 150);
+}
+
+:root {
+  color-scheme: light dark;
+}
+
+html,
+body,
+#root {
+  min-height: 100%;
+}
+
+body {
+  @apply bg-zinc-50 text-zinc-900 antialiased dark:bg-zinc-950 dark:text-zinc-100;
+}
