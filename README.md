@@ -20,6 +20,8 @@ collection still has one web client and one sync path.
 
 The screenshots use demo data from a stubbed API.
 
+<img src="assets/demo.gif" width="600" alt="Typing die Rechnung, pressing Enter, and the draft appearing a second later">
+
 Type a word (or paste a list, one per line) and press Enter:
 
 <img src="assets/screenshot-input.png" width="600" alt="The input screen with the word box, the status of the text model, voice, dictionary and Anki, and the recently added notes">
