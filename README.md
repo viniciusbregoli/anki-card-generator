@@ -26,7 +26,7 @@ Type a word (or paste a list, one per line) and press Enter:
 
 <img src="assets/screenshot-input.png" width="600" alt="The input screen with the word box, the status of the text model, voice, dictionary and Anki, and the recently added notes">
 
-A single word opens straight in the draft editor. The article is coloured, the gender rule and
+The first word typed into an empty list opens straight in the draft editor. The article is coloured, the gender rule and
 plural are filled in, the examples mark the word in bold, and the level and topic tags can be
 changed before adding:
 
