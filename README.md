@@ -16,6 +16,31 @@ the card lands in your own Anki collection, ready on the phone after the next sy
 This app holds no Anki data. Every write goes through anki-manager's API, so the
 collection still has one web client and one sync path.
 
+## Screenshots
+
+The screenshots use demo data from a stubbed API.
+
+<img src="assets/demo.gif" width="600" alt="Typing die Rechnung, pressing Enter, and the draft appearing a second later">
+
+Type a word (or paste a list, one per line) and press Enter:
+
+<img src="assets/screenshot-input.png" width="600" alt="The input screen with the word box, the status of the text model, voice, dictionary and Anki, and the recently added notes">
+
+The first word typed into an empty list opens straight in the draft editor. The article is coloured, the gender rule and
+plural are filled in, the examples mark the word in bold, and the level and topic tags can be
+changed before adding:
+
+<img src="assets/screenshot-draft.png" width="600" alt="The draft for die Rechnung: article buttons with die selected in red, plural Rechnungen, gender rule, two examples with translations, level A2, topic shopping-money and a Wiktionary check">
+
+A list becomes a batch. Words you already have start unticked, and drafts with a warning
+(here der/die See) are flagged:
+
+<img src="assets/screenshot-batch.png" width="600" alt="A batch of six drafts: a verb, two nouns, an adverb, a phrase, der See with one warning and das Brot marked Have it">
+
+The same note in Anki, rendered from the templates in `german.py`:
+
+<img src="assets/screenshot-anki-card.png" alt="Three DE Noun cards for die Rechnung: the answer side of English to Deutsch, and the front and back of the Genus card">
+
 ## What a card gets
 
 | Type | Note type | Cards |
