@@ -1,9 +1,9 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Sparkles } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
-import { api, ApiError, type Status } from './api'
+import { api, ApiError, type Language, type Status } from './api'
 import { BatchItem, type Item } from './components/BatchItem'
-import { cardsFor } from './components/DraftEditor'
+import { cardsFor, LANGUAGE_NAMES, PLACEHOLDERS } from './languages'
 import { useToast } from './components/Toast'
 import { Button, inputClass, Spinner } from './components/ui'
 
@@ -15,14 +15,18 @@ const message = (e: unknown) => (e instanceof Error ? e.message : String(e))
 export default function App() {
   const toast = useToast()
   const queryClient = useQueryClient()
+  const [language, setLanguage] = useState<Language>(() => localStorage.getItem('card-language') === 'es' ? 'es' : 'de')
   const status = useQuery({ queryKey: ['status'], queryFn: api.status, refetchInterval: 30_000 })
-  const recent = useQuery({ queryKey: ['recent'], queryFn: api.recent })
+  const recent = useQuery({ queryKey: ['recent', language], queryFn: () => api.recent(language) })
 
   const [text, setText] = useState('')
   const [items, setItems] = useState<Item[]>([])
   const [saving, setSaving] = useState(false)
+  const [menu, setMenu] = useState<'commands' | 'help' | null>(null)
   const itemsRef = useRef(items)
   const input = useRef<HTMLTextAreaElement>(null)
+  const languageInput = useRef<HTMLSelectElement>(null)
+  const commandDialog = useRef<HTMLDialogElement>(null)
   useEffect(() => {
     itemsRef.current = items
   }, [items])
@@ -35,7 +39,7 @@ export default function App() {
       for (let it = queue.shift(); it; it = queue.shift()) {
         update(it.id, { status: 'drafting', error: undefined })
         try {
-          const r = await api.draft({ text: it.input })
+          const r = await api.draft({ text: it.input, language: it.language })
           update(it.id, {
             status: 'ready',
             result: r,
@@ -65,6 +69,7 @@ export default function App() {
     const fresh: Item[] = lines.slice(0, MAX_LINES).map((line) => ({
       id: crypto.randomUUID(),
       input: line,
+      language,
       status: 'queued',
       selected: false,
       expanded: false,
@@ -78,6 +83,7 @@ export default function App() {
     setSaving(true)
     let notes = 0
     let cards = 0
+    const decks = new Set<string>()
     // One at a time: each save makes up to three audio clips, and the first one
     // also creates the note types and the deck.
     for (const id of ids) {
@@ -85,10 +91,11 @@ export default function App() {
       if (!it?.draft || it.status !== 'ready') continue
       update(id, { status: 'saving', error: undefined })
       try {
-        await api.save(it.draft, allowDuplicate)
+        const saved = await api.save(it.draft, allowDuplicate)
+        decks.add(saved.deck)
         update(id, { status: 'saved', selected: false, expanded: false, duplicate: false })
         notes += 1
-        cards += cardsFor(it.draft.kind).length
+        cards += cardsFor(it.draft.kind, it.draft.language).length
       } catch (e) {
         const duplicate = e instanceof ApiError && e.code === 'duplicate'
         update(id, {
@@ -101,25 +108,91 @@ export default function App() {
     }
     setSaving(false)
     queryClient.invalidateQueries({ queryKey: ['recent'] })
-    if (notes) toast(`Added ${notes} ${notes === 1 ? 'note' : 'notes'} (${cards} cards) to ${deck}`)
+    if (notes) toast(`Added ${notes} ${notes === 1 ? 'note' : 'notes'} (${cards} cards) to ${[...decks].join(', ')}`)
   }
 
-  const deck = status.data?.deck ?? 'German - Mine'
+  const languageStatus = status.data?.languages[language]
+  const deck = languageStatus?.deck ?? `${LANGUAGE_NAMES[language]} - Mine`
   const ready = items.filter((i) => i.status === 'ready')
   const selected = ready.filter((i) => i.selected)
-  const selectedCards = selected.reduce((n, i) => n + cardsFor(i.draft!.kind).length, 0)
+  const selectedCards = selected.reduce((n, i) => n + cardsFor(i.draft!.kind, i.draft!.language).length, 0)
   const pending = items.some((i) => i.status === 'queued' || i.status === 'drafting')
   const done = items.filter((i) => i.status === 'saved').length
+
+  const commands = [
+    { key: 'i', label: 'Focus word input', run: () => input.current?.focus() },
+    { key: 'l', label: 'Choose card language', run: () => languageInput.current?.focus() },
+    { key: 'a', label: 'Add selected notes', disabled: !selected.length || saving, run: () => save(selected.map((i) => i.id)) },
+  ]
+
+  useEffect(() => {
+    if (menu) commandDialog.current?.showModal()
+    else commandDialog.current?.close()
+  }, [menu])
+
+  useEffect(() => {
+    function onKeyDown(event: KeyboardEvent) {
+      if (event.isComposing) return
+      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k') {
+        event.preventDefault()
+        setMenu((current) => current ? null : 'commands')
+        return
+      }
+      if (!menu && event.key === 'Escape') {
+        setItems((list) => list.map((item) => ({ ...item, expanded: false })))
+        return
+      }
+      const target = event.target as HTMLElement
+      if (target.closest('input, textarea, select, [contenteditable="true"]') || event.metaKey || event.ctrlKey || event.altKey) return
+      if (event.key === '?') {
+        event.preventDefault()
+        setMenu('help')
+      } else if (!menu) {
+        const command = commands.find((command) => command.key === event.key && !command.disabled)
+        if (command) {
+          event.preventDefault()
+          command.run()
+        }
+      }
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  })
 
   return (
     <div className="mx-auto max-w-2xl px-4 py-6 sm:py-10">
       <header className="mb-6 flex flex-wrap items-baseline justify-between gap-x-4 gap-y-2">
         <div>
           <h1 className="text-xl font-semibold tracking-tight">Card Generator</h1>
-          <p className="text-sm text-zinc-500 dark:text-zinc-400">German · new cards go to {deck}</p>
+          <div className="mt-1 flex flex-wrap items-center gap-2 text-sm text-zinc-500 dark:text-zinc-400">
+            <select
+              ref={languageInput}
+              aria-label="Card language"
+              title="Choose card language (L)"
+              value={language}
+              onChange={(e) => {
+                const next = e.target.value as Language
+                setLanguage(next)
+                localStorage.setItem('card-language', next)
+              }}
+              className={`${inputClass.replace('w-full ', '')} w-28`}
+            >
+              {(Object.entries(LANGUAGE_NAMES) as [Language, string][]).map(([code, name]) => (
+                <option key={code} value={code}>{name}</option>
+              ))}
+            </select>
+            <span>New cards go to {deck}</span>
+          </div>
         </div>
-        <StatusLine status={status.data} />
+        <StatusLine status={status.data && { ...status.data, ...languageStatus }} />
       </header>
+
+      <div className="mb-3 flex justify-end">
+        <Button variant="ghost" onClick={() => setMenu('commands')} title="Commands (Cmd+K)">
+          Commands <kbd className="text-xs">⌘K</kbd>
+        </Button>
+        <Button variant="ghost" onClick={() => setMenu('help')} title="Keyboard shortcuts (?)">?</Button>
+      </div>
 
       <form
         className="mb-6"
@@ -141,9 +214,9 @@ export default function App() {
                 generate()
               }
             }}
-            placeholder="Rechnung"
+            placeholder={PLACEHOLDERS[language]}
             aria-label="Words or sentences, one per line"
-            lang="de"
+            lang={language}
             autoCapitalize="off"
             spellCheck={false}
             className={`${inputClass} resize-none py-2 text-base`}
@@ -224,13 +297,36 @@ export default function App() {
               <li key={n.id} className="flex items-baseline justify-between gap-3 px-3 py-2 text-sm">
                 <span className="truncate">{n.first_field}</span>
                 <span className="shrink-0 text-xs text-zinc-500 tabular-nums dark:text-zinc-400">
-                  {n.notetype.replace(/^DE /, '')} · {new Date(n.created * 1000).toLocaleDateString()}
+                  {n.notetype.replace(/^(DE|ES) /, '')} · {new Date(n.created * 1000).toLocaleDateString()}
                 </span>
               </li>
             ))}
           </ul>
         )}
       </section>
+
+      <dialog
+        ref={commandDialog}
+        aria-labelledby="commands-title"
+        onCancel={() => setMenu(null)}
+        onClose={() => setMenu(null)}
+        className="m-auto w-80 max-w-[calc(100%-2rem)] rounded-lg bg-white p-4 text-zinc-900 shadow-xl backdrop:bg-black/40 dark:bg-zinc-900 dark:text-zinc-100"
+      >
+        <h2 id="commands-title" className="mb-3 font-semibold">{menu === 'help' ? 'Keyboard shortcuts' : 'Commands'}</h2>
+        <div className="flex flex-col gap-1">
+          {commands.map((command) => (
+            <Button key={command.key} variant="ghost" disabled={command.disabled} className="justify-between" onClick={() => {
+              commandDialog.current?.close()
+              setMenu(null)
+              command.run()
+            }}>
+              {command.label} <kbd>{command.key.toUpperCase()}</kbd>
+            </Button>
+          ))}
+          <p className="my-2 text-xs text-zinc-500 dark:text-zinc-400">Enter generates. Shift+Enter adds a line. Esc closes a dialog or collapses drafts. Cmd+K opens commands. ? shows shortcuts.</p>
+          <Button onClick={() => setMenu(null)}>Close <kbd>Esc</kbd></Button>
+        </div>
+      </dialog>
     </div>
   )
 }

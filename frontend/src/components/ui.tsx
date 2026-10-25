@@ -1,6 +1,6 @@
 import { Volume2 } from 'lucide-react'
 import { useRef, useState, type ButtonHTMLAttributes, type ReactNode } from 'react'
-import { api } from '../api'
+import { api, type Language } from '../api'
 import { useToast } from './Toast'
 
 type Variant = 'primary' | 'secondary' | 'ghost'
@@ -51,8 +51,8 @@ export function Spinner({ className = 'size-4' }: { className?: string }) {
 // Text -> audio URL, so replaying the same text doesn't even hit the server.
 const audioUrls = new Map<string, string>()
 
-/** Speaks German text with the configured voice. Audio is cached server-side too. */
-export function PlayButton({ text, disabled }: { text: string; disabled?: boolean }) {
+/** Audio is cached by language and text on both the client and server. */
+export function PlayButton({ text, language, disabled }: { text: string; language: Language; disabled?: boolean }) {
   const [busy, setBusy] = useState(false)
   const audio = useRef<HTMLAudioElement | null>(null)
   const toast = useToast()
@@ -60,12 +60,13 @@ export function PlayButton({ text, disabled }: { text: string; disabled?: boolea
   async function play() {
     const clean = text.replace(/<[^>]+>/g, '').trim()
     if (!clean) return
+    const cacheKey = `${language}:${clean}`
     setBusy(true)
     try {
-      let url = audioUrls.get(clean)
+      let url = audioUrls.get(cacheKey)
       if (!url) {
-        url = (await api.speak(clean)).url
-        audioUrls.set(clean, url)
+        url = (await api.speak(clean, language)).url
+        audioUrls.set(cacheKey, url)
       }
       audio.current?.pause()
       audio.current = new Audio(url)

@@ -122,7 +122,8 @@ def iter_entries(lines: Iterable[str]) -> Iterator[dict]:
 # -- building ------------------------------------------------------------------
 
 
-def build(lines: Iterable[str], out: Path) -> int:
+def build(lines: Iterable[str], out: Path, parse_noun=parse_noun, parse_verb=parse_verb,
+          schema_version: int = SCHEMA_VERSION) -> int:
     """Write a fresh database to `out` (atomically). Returns the number of rows."""
     tmp = out.with_suffix(".tmp")
     tmp.unlink(missing_ok=True)
@@ -149,7 +150,7 @@ def build(lines: Iterable[str], out: Path) -> int:
             )
             rows += 1
     db.executescript("create index nouns_word on nouns(word); create index verbs_word on verbs(word);")
-    db.execute("insert into meta values ('schema', ?)", (str(SCHEMA_VERSION),))
+    db.execute("insert into meta values ('schema', ?)", (str(schema_version),))
     db.commit()
     db.close()
     tmp.replace(out)
@@ -172,8 +173,12 @@ def _file_lines(f: IO[str]) -> Iterator[str]:
 class Dictionary:
     """Read side, plus an optional one-time background build when the file is missing."""
 
-    def __init__(self, path: Path) -> None:
+    def __init__(self, path: Path, parse_noun=parse_noun, parse_verb=parse_verb,
+                 schema_version: int = SCHEMA_VERSION) -> None:
         self.path = path
+        self.parse_noun = parse_noun
+        self.parse_verb = parse_verb
+        self.schema_version = schema_version
         self.state = "missing"  # missing | building | ready | error
         self.error: str | None = None
         self._local = threading.local()
@@ -186,7 +191,7 @@ class Dictionary:
         try:
             with sqlite3.connect(f"file:{self.path}?mode=ro", uri=True) as db:
                 row = db.execute("select value from meta where key = 'schema'").fetchone()
-            return row is not None and row[0] == str(SCHEMA_VERSION)
+            return row is not None and row[0] == str(self.schema_version)
         except sqlite3.Error:
             return False
 
@@ -197,7 +202,8 @@ class Dictionary:
 
         def run() -> None:
             try:
-                rows = build(_download_lines(url), self.path)
+                rows = build(_download_lines(url), self.path, self.parse_noun, self.parse_verb,
+                             self.schema_version)
                 log.info("dictionary built: %d rows", rows)
                 self.state = "ready"
             except Exception as exc:  # noqa: BLE001 - reported through status

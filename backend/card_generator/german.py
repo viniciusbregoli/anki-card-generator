@@ -6,11 +6,12 @@ import json
 import re
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from . import tagging
 from .dictionary import ARTICLES, PLURAL_ONLY, Dictionary
 
+Language = Literal["de", "es"]
 Kind = Literal["noun", "verb", "word", "phrase"]
 Level = Literal["ok", "warn", "info"]
 GENDER_OF = {"der": "m", "die": "f", "das": "n"}
@@ -21,6 +22,8 @@ GENDER_NAME = {"m": "masculine", "f": "feminine", "n": "neuter"}
 
 
 class Example(BaseModel):
+    """The legacy de key holds the sentence in the draft's language."""
+
     de: str
     en: str
 
@@ -29,8 +32,9 @@ class Draft(BaseModel):
     """One card's content, as the model proposed it and the user edited it."""
 
     kind: Kind
+    language: Language = "de"
     lemma: str = Field(min_length=1)
-    article: Literal["der", "die", "das", ""] = ""
+    article: Literal["der", "die", "das", "el", "la", "los", "las", ""] = ""
     plural: str = ""
     part_of_speech: str = ""
     meaning: str = ""
@@ -43,6 +47,13 @@ class Draft(BaseModel):
     note: str = ""
     source: str = ""  # the sentence where the user met the word
     tags: list[str] = []  # level::… and topic::…
+
+    @model_validator(mode="after")
+    def article_matches_language(self) -> Draft:
+        articles = {"de": {"der", "die", "das"}, "es": {"el", "la", "los", "las"}}
+        if self.article and self.article not in articles[self.language]:
+            raise ValueError("The article does not belong to the draft language.")
+        return self
 
 
 class Check(BaseModel):
@@ -194,11 +205,12 @@ def user_message(text: str, context: str = "", kind: Kind | None = None, hint: s
     return "\n".join(parts)
 
 
-def draft_from_model(data: dict, source: str = "") -> tuple[Draft, str]:
+def draft_from_model(data: dict, source: str = "", *, language: Language = "de") -> tuple[Draft, str]:
     """Model JSON -> Draft, plus the model's note about how it read the input."""
     kind = data["kind"]
     draft = Draft(
         kind=kind,
+        language=language,
         lemma=data["lemma"].strip(),
         article=data["article"] if kind == "noun" else "",
         plural=data["plural"].strip() if kind == "noun" else "",

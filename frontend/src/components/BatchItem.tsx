@@ -1,6 +1,7 @@
 import { AlertTriangle, Check, ChevronDown, Copy, RotateCcw, X } from 'lucide-react'
-import type { Draft, DraftResult } from '../api'
-import { ARTICLE_TEXT, cardsFor, DraftFields, headword, tagValue } from './DraftEditor'
+import type { Draft, DraftResult, Language } from '../api'
+import { ARTICLE_TEXT, cardsFor, LANGUAGE_NAMES } from '../languages'
+import { DraftFields, headword, tagValue } from './DraftEditor'
 import { Button, PlayButton, Spinner } from './ui'
 
 export type ItemStatus = 'queued' | 'drafting' | 'ready' | 'failed' | 'saving' | 'saved'
@@ -8,6 +9,7 @@ export type ItemStatus = 'queued' | 'drafting' | 'ready' | 'failed' | 'saving' |
 export interface Item {
   id: string
   input: string
+  language: Language
   status: ItemStatus
   result?: DraftResult
   draft?: Draft
@@ -39,6 +41,7 @@ export function BatchItem({
   return (
     <li className="bg-white first:rounded-t-lg last:rounded-b-lg dark:bg-zinc-900">
       <div className="flex items-center gap-2 px-3 py-2.5">
+        <span className="text-xs text-zinc-500" title={LANGUAGE_NAMES[item.language]}>{item.language.toUpperCase()}</span>
         <input
           type="checkbox"
           aria-label={`Add ${draft ? headword(draft) : item.input}`}
@@ -83,7 +86,7 @@ export function BatchItem({
           )}
           {status === 'saved' && draft && (
             <span className="flex items-center gap-1 text-emerald-700 dark:text-emerald-400">
-              <Check className="size-3.5" /> Added · {cardsFor(draft.kind).length} cards
+              <Check className="size-3.5" /> Added · {cardsFor(draft.kind, draft.language).length} cards
             </span>
           )}
           {status === 'ready' && known && (
@@ -102,7 +105,7 @@ export function BatchItem({
               <AlertTriangle className="size-3" /> {warnings}
             </span>
           )}
-          {draft && status !== 'saved' && <PlayButton text={headword(draft)} />}
+          {draft && status !== 'saved' && <PlayButton text={headword(draft)} language={draft.language} />}
           {editable && (
             <button
               type="button"

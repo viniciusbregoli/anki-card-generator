@@ -6,7 +6,7 @@ import logging
 import os
 import threading
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Request
@@ -14,7 +14,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from . import german, tagging
+from . import german, spanish, tagging
 from .clients import AnkiManager, Speech, TextModel, UpstreamError
 from .dictionary import SOURCE_URL, Dictionary
 
@@ -22,7 +22,15 @@ log = logging.getLogger(__name__)
 
 CSRF_HEADER = "x-card-generator"
 LANGUAGE = "de"
+LANGUAGES = {"de": german, "es": spanish}
 TAGS = ["card-generator"]
+
+
+@dataclass
+class LanguageServices:
+    speech: Speech
+    dictionary: Dictionary
+    deck: str
 
 
 @dataclass
@@ -32,6 +40,17 @@ class Services:
     manager: AnkiManager
     dictionary: Dictionary
     deck: str
+    languages: dict[str, LanguageServices] = field(default_factory=dict)
+
+    def for_language(self, language: str) -> LanguageServices:
+        if language in self.languages:
+            return self.languages[language]
+        if language == LANGUAGE:
+            return LanguageServices(self.speech, self.dictionary, self.deck)
+        raise HTTPException(503, f"Language '{language}' is not configured.")
+
+    def configured_languages(self) -> list[str]:
+        return [code for code in LANGUAGES if code == LANGUAGE or code in self.languages]
 
 
 # -- request bodies --------------------------------------------------------------
@@ -39,6 +58,7 @@ class Services:
 
 class DraftIn(BaseModel):
     text: str = Field(min_length=1, max_length=500)
+    language: german.Language = LANGUAGE
     context: str = Field("", max_length=1000)
     kind: german.Kind | None = None
     hint: str = Field("", max_length=200)  # the sense to write the card for, e.g. "to be"
@@ -47,6 +67,7 @@ class DraftIn(BaseModel):
 
 class SpeakIn(BaseModel):
     text: str = Field(min_length=1, max_length=500)
+    language: german.Language = LANGUAGE
 
 
 class SaveIn(BaseModel):
@@ -61,15 +82,17 @@ def create_app(services: Services | None = None, *, static_dir: Path | None = No
                build_dictionary: bool | None = None) -> FastAPI:
     app = FastAPI(title="Card Generator")
     app.state.services = services or services_from_env()
-    notetype_ids: dict[str, int] = {}
+    notetype_ids: dict[tuple[str, str], int] = {}
     notetype_lock = threading.Lock()
 
-    if build_dictionary is None:
-        build_dictionary = bool(os.environ.get("CARD_GENERATOR_DICTIONARY_URL", SOURCE_URL))
-    if build_dictionary:
-        app.state.services.dictionary.build_in_background(
-            os.environ.get("CARD_GENERATOR_DICTIONARY_URL", SOURCE_URL)
-        )
+    sources = {
+        "de": os.environ.get("CARD_GENERATOR_DICTIONARY_URL", SOURCE_URL),
+        "es": os.environ.get("CARD_GENERATOR_DICTIONARY_URL_ES", spanish.SOURCE_URL),
+    }
+    for code in app.state.services.configured_languages():
+        url = sources[code]
+        if build_dictionary or (build_dictionary is None and url):
+            app.state.services.for_language(code).dictionary.build_in_background(url)
 
     @app.middleware("http")
     async def csrf_guard(request: Request, call_next):
@@ -98,13 +121,26 @@ def create_app(services: Services | None = None, *, static_dir: Path | None = No
             anki = {"ok": True, "sync": manager["sync"]["state"], "notes": manager["notes"], "error": None}
         except UpstreamError as exc:
             anki = {"ok": False, "sync": None, "notes": None, "error": str(exc)}
+        languages = {}
+        for code in s.configured_languages():
+            ls = s.for_language(code)
+            languages[code] = {
+                "deck": ls.deck,
+                "speech": {
+                    "configured": ls.speech.configured,
+                    "model": ls.speech.model,
+                    "voice": ls.speech.voice_id,
+                },
+                "dictionary": {"state": ls.dictionary.state, "error": ls.dictionary.error},
+            }
         return {
             "language": LANGUAGE,
             "deck": s.deck,
             "text_model": {"configured": s.text.configured, "model": s.text.model},
-            "speech": {"configured": s.speech.configured, "model": s.speech.model, "voice": s.speech.voice_id},
+            "speech": languages[LANGUAGE]["speech"],
             "tags": {"levels": list(tagging.LEVELS), "topics": list(tagging.TOPICS)},
-            "dictionary": {"state": s.dictionary.state, "error": s.dictionary.error},
+            "dictionary": languages[LANGUAGE]["dictionary"],
+            "languages": languages,
             "anki": anki,
         }
 
@@ -113,11 +149,13 @@ def create_app(services: Services | None = None, *, static_dir: Path | None = No
     @app.post("/api/drafts")
     def make_draft(body: DraftIn, request: Request):
         s = svc(request)
+        lang = LANGUAGES[body.language]
+        ls = s.for_language(body.language)
         ask = lambda: s.text.json(  # noqa: E731
-            german.SYSTEM_PROMPT,
-            german.user_message(body.text, body.context, body.kind, body.hint),
-            german.SCHEMA,
-            "german_card",
+            lang.SYSTEM_PROMPT,
+            lang.user_message(body.text, body.context, body.kind, body.hint),
+            lang.SCHEMA,
+            f"{body.language}_card",
         )
         data = ask()
         for _ in range(2):
@@ -130,71 +168,85 @@ def create_app(services: Services | None = None, *, static_dir: Path | None = No
                 data = retry
         if body.kind:
             data["kind"] = body.kind  # the user's choice wins over the model's
-        draft, input_note = german.draft_from_model(data, body.context)
+        draft, input_note = lang.draft_from_model(data, body.context)
+        draft.language = body.language
         checks: list[german.Check] = []
         if body.review:
-            fixed = german.apply_review(draft, s.text.json(
-                german.REVIEW_PROMPT, german.review_message(draft, body.hint), german.REVIEW_SCHEMA,
+            fixed = lang.apply_review(draft, s.text.json(
+                lang.REVIEW_PROMPT, lang.review_message(draft, body.hint), lang.REVIEW_SCHEMA,
                 "review", reasoning="high",
             ))
             checks += [german.Check(level="info", message=f"Review: {c}") for c in fixed]
-        checks = german.check(draft, s.dictionary) + checks
-        duplicates = _duplicates(s, draft.lemma, checks)
+        checks = lang.check(draft, ls.dictionary) + checks
+        duplicates = _duplicates(s, body.language, draft.lemma, checks)
         return {"draft": draft, "checks": checks, "input_note": input_note, "duplicates": duplicates}
 
     @app.post("/api/speak")
     def speak(body: SpeakIn, request: Request):
         s = svc(request)
-        key = s.speech.synthesize(german.strip_html(body.text), LANGUAGE)
-        return {"url": f"/audio/{s.speech.filename(key)}"}
+        speech = s.for_language(body.language).speech
+        key = speech.synthesize(german.strip_html(body.text), body.language)
+        return {"url": f"/audio/{speech.filename(key)}"}
 
     @app.get("/audio/{filename}")
     def audio(filename: str, request: Request):
         s = svc(request)
-        path = (s.speech.cache_dir / filename).resolve()
-        if path.parent != s.speech.cache_dir.resolve() or not path.is_file():
-            raise HTTPException(404)
-        return FileResponse(path, media_type="audio/mpeg", headers={"Cache-Control": "private, max-age=86400"})
+        for code in s.configured_languages():
+            cache_dir = s.for_language(code).speech.cache_dir.resolve()
+            path = (cache_dir / filename).resolve()
+            if path.parent == cache_dir and path.is_file():
+                return FileResponse(path, media_type="audio/mpeg", headers={"Cache-Control": "private, max-age=86400"})
+        raise HTTPException(404)
 
     # -- saving ----------------------------------------------------------------------
 
-    def notetype_id(s: Services, kind: str, *, refresh: bool = False) -> int:
+    def notetype_id(s: Services, language: str, kind: str, *, refresh: bool = False) -> int:
         with notetype_lock:
-            if refresh or kind not in notetype_ids:
-                notetype_ids[kind] = s.manager.ensure_notetype(german.NOTETYPES[kind])
-            return notetype_ids[kind]
+            key = (language, kind)
+            if refresh or key not in notetype_ids:
+                notetype_ids[key] = s.manager.ensure_notetype(LANGUAGES[language].NOTETYPES[kind])
+            return notetype_ids[key]
 
     @app.post("/api/notes", status_code=201)
     def save(body: SaveIn, request: Request):
         s = svc(request)
         draft = body.draft
+        lang = LANGUAGES[draft.language]
+        ls = s.for_language(draft.language)
         audio: dict[str, str] = {}
-        if s.speech.configured:
-            texts = german.speech_texts(draft)
+        if ls.speech.configured:
+            texts = lang.speech_texts(draft)
             # The word and its examples are spoken in parallel; uploads stay sequential.
             with ThreadPoolExecutor(max_workers=3) as pool:
-                keys = dict(zip(texts, pool.map(lambda t: s.speech.synthesize(t, LANGUAGE), texts.values())))
-            for field, key in keys.items():
-                audio[field] = s.manager.upload_media(s.speech.filename(key), s.speech.path(key).read_bytes())
-        fields = german.note_fields(draft, audio)
-        deck_id = s.manager.ensure_deck(s.deck)
+                keys = dict(zip(texts, pool.map(
+                    lambda t: ls.speech.synthesize(t, draft.language), texts.values()
+                )))
+            for field_name, key in keys.items():
+                audio[field_name] = s.manager.upload_media(
+                    ls.speech.filename(key), ls.speech.path(key).read_bytes()
+                )
+        fields = lang.note_fields(draft, audio)
+        deck_id = s.manager.ensure_deck(ls.deck)
         # Anki tags can't contain spaces.
         tags = [*TAGS, draft.kind, *(t.strip().replace(" ", "_") for t in draft.tags if t.strip())]
         try:
-            note = s.manager.add_note(notetype_id(s, draft.kind), deck_id, fields, tags,
+            note = s.manager.add_note(notetype_id(s, draft.language, draft.kind), deck_id, fields, tags,
                                       allow_duplicate=body.allow_duplicate)
         except UpstreamError as exc:
             if exc.status != 404:
                 raise
             # The note type was deleted elsewhere since it was cached; recreate it once.
-            note = s.manager.add_note(notetype_id(s, draft.kind, refresh=True), deck_id, fields, tags,
-                                      allow_duplicate=body.allow_duplicate)
-        return {"id": note["id"], "notetype": note["notetype"], "deck": s.deck, "audio": len(audio)}
+            note = s.manager.add_note(
+                notetype_id(s, draft.language, draft.kind, refresh=True), deck_id, fields, tags,
+                allow_duplicate=body.allow_duplicate,
+            )
+        return {"id": note["id"], "notetype": note["notetype"], "deck": ls.deck, "audio": len(audio)}
 
     @app.get("/api/recent")
-    def recent(request: Request):
+    def recent(request: Request, language: german.Language = LANGUAGE):
         s = svc(request)
-        return s.manager.find_notes(f'"deck:{s.deck}" tag:card-generator', limit=20)
+        deck = s.for_language(language).deck
+        return s.manager.find_notes(f'"deck:{deck}" tag:card-generator', limit=20)
 
     # -- frontend --------------------------------------------------------------------
 
@@ -205,9 +257,9 @@ def create_app(services: Services | None = None, *, static_dir: Path | None = No
     return app
 
 
-def _duplicates(s: Services, lemma: str, checks: list[german.Check]) -> list[dict]:
+def _duplicates(s: Services, language: str, lemma: str, checks: list[german.Check]) -> list[dict]:
     try:
-        rows = s.manager.find_notes(german.duplicate_query(lemma), limit=10)
+        rows = s.manager.find_notes(LANGUAGES[language].duplicate_query(lemma), limit=10)
     except UpstreamError as exc:
         checks.append(german.Check(level="info", message=f"Couldn't look for duplicates: {exc}"))
         return []
@@ -217,7 +269,7 @@ def _duplicates(s: Services, lemma: str, checks: list[german.Check]) -> list[dic
 def services_from_env() -> Services:
     data = Path(os.environ.get("CARD_GENERATOR_DATA", "/data"))
     data.mkdir(parents=True, exist_ok=True)
-    return Services(
+    services = Services(
         text=TextModel(
             os.environ.get("OPENROUTER_API_KEY") or None,
             os.environ.get("OPENROUTER_MODEL", "openai/gpt-6-luna"),
@@ -233,3 +285,15 @@ def services_from_env() -> Services:
         dictionary=Dictionary(data / "de-dictionary.sqlite"),
         deck=os.environ.get("CARD_GENERATOR_DECK", "German - Mine"),
     )
+    services.languages["es"] = LanguageServices(
+        speech=Speech(
+            os.environ.get("ELEVENLABS_API_KEY") or None,
+            os.environ.get("ELEVENLABS_VOICE_ID_ES") or services.speech.voice_id,
+            services.speech.model,
+            data / "audio",
+        ),
+        dictionary=Dictionary(data / "es-dictionary.sqlite", spanish.parse_noun, spanish.parse_verb,
+                              spanish.SCHEMA_VERSION),
+        deck=os.environ.get("CARD_GENERATOR_DECK_ES", "Spanish - Mine"),
+    )
+    return services

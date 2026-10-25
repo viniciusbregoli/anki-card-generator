@@ -2,7 +2,7 @@
 
 # anki-card-generator
 
-Type a German word, expression or sentence you ran into. A text model drafts the card,
+Choose German or Spanish and type a word, expression or sentence you ran into. A text model drafts the card,
 Wiktionary checks the gender and plural, ElevenLabs reads it aloud, and after you review it
 the card lands in your own Anki collection, ready on the phone after the next sync.
 
@@ -57,9 +57,23 @@ The same note in Anki, rendered from the templates in `german.py`:
   template builds the links (it drops `sich` for Wiktionary); the draft editor shows the same links.
 - New cards go to `German - Mine`, tagged `card-generator`, the type, a level and a topic.
 
+Spanish uses its own `ES Noun`, `ES Verb`, `ES Word` and `ES Phrase` note types and the
+`Spanish - Mine` deck. Nouns get translation cards in both directions and a gender card;
+phrases also get a listening card. Spanish verbs show third-person singular present,
+preterite and perfect forms with haber. Article colours are blue for el/los and red for
+la/las. Spanish cards and the editor link to Wiktionary and WordReference.
+
+The language selector applies to new drafts and the recently added list. Every queued
+item keeps its original language through retries, playback, editing and saving, so a
+batch can contain both languages. The selected language is remembered in this browser.
+Use Tab to reach the selector, or press L outside a text field. Cmd+K (Ctrl+K on other
+systems) opens commands, I focuses the word input, A saves selected notes, and ? shows
+the shortcuts. Esc closes the dialog or collapses drafts. Enter generates cards;
+Shift+Enter adds another input line.
+
 ## Level and topic tags
 
-Every German note gets `level::A1`…`level::C2` and one of 20 `topic::…` tags (`food`,
+Every German or Spanish note gets `level::A1`…`level::C2` and one of 20 `topic::…` tags (`food`,
 `travel`, `grammar`, …; the list is in `tagging.py`), so filtered decks like
 `tag:topic::food tag:level::A2` work. The text model picks both in the same call that
 drafts the card, and you can change them before adding it. The level is a guess from how
@@ -87,6 +101,7 @@ sudo docker exec anki-card-generator python -m card_generator.batch save words-0
 
 Batch cards are tagged `core-words` and `core::0001-0100` (one tag per hundred), or
 `core-phrases` and `phrase-tier::1`.
+These existing curated lists and batch commands remain German-only.
 
 ## Checks
 
@@ -102,9 +117,18 @@ Batch cards are tagged `core-words` and `core::0001-0100` (one tag per hundred),
 - **Duplicates** are searched in this app's note types and in the existing Goethe note
   types (`Wort_DE`, `base_d`, `de_word`, `full_d`).
 
+Spanish has a separate Wiktionary database, built in the background on first startup.
+It checks noun gender and plural forms, keeps gender for plural-only nouns, and checks
+verb forms against the Spanish conjugation tables. Confirmed mismatches are corrected
+and flagged for review. Common feminine nouns with stressed initial a/ha keep singular
+el and feminine plurals; uncertain article exceptions are flagged for manual review.
+Drafting still works while either dictionary is unavailable, with unverified checks
+reported in the editor.
+
 ## Layout
 
 - `backend/card_generator/german.py`: note types, prompt, schema, checks, draft → fields.
+- `backend/card_generator/spanish.py`: Spanish prompts, dictionary parsing, checks and note types.
 - `backend/card_generator/dictionary.py`: Wiktionary extract builder and lookups.
 - `backend/card_generator/clients.py`: OpenRouter, ElevenLabs (with disk cache), anki-manager.
 - `backend/card_generator/tagging.py`: the level and topic lists.
@@ -116,11 +140,18 @@ Writes need an `x-card-generator: 1` header, for the same CSRF reason as anki-ma
 Generated audio is cached by `hash(model, voice, language, text)` in `/data/audio`, so
 nothing is paid for twice.
 
+`POST /api/drafts` and `POST /api/speak` accept `language: "de" | "es"` and default to
+German for older clients. Draft responses include `language`; pass that draft unchanged
+to `POST /api/notes` to route it to its own deck and note type. The `de` key inside each
+example still holds the sentence in the selected language, preserving the existing API
+shape. `GET /api/recent?language=es` selects Spanish, and `/api/status` exposes each
+language's deck, voice and dictionary state under `languages`.
+
 ## Development
 
 ```sh
-cd backend && python3 -m venv .venv && .venv/bin/pip install -e '.[dev]'
-.venv/bin/python -m pytest                  # fake remote services, real Wiktionary sample
+cd backend && uv sync --extra dev
+uv run pytest                            # fake remote services, Wiktionary samples
 
 # against a running anki-manager:
 OPENROUTER_API_KEY=… ELEVENLABS_API_KEY=… CARD_GENERATOR_DATA=/tmp/acg \
@@ -140,9 +171,12 @@ cd ../frontend && pnpm install && CARD_GENERATOR_BACKEND=http://127.0.0.1:8001 p
 | `ELEVENLABS_API_KEY` | (none: cards are saved without audio) | |
 | `ELEVENLABS_MODEL` | `eleven_v4` | |
 | `ELEVENLABS_VOICE_ID` | `IWm8DnJ4NGjFI7QAM5lM` | "Stephan", native German male |
+| `ELEVENLABS_VOICE_ID_ES` | `ELEVENLABS_VOICE_ID` | Set a Spanish voice ID for Spanish cards; requests use language code `es` |
 | `CARD_GENERATOR_DECK` | `German - Mine` | Created if missing |
+| `CARD_GENERATOR_DECK_ES` | `Spanish - Mine` | Created if missing |
 | `CARD_GENERATOR_DATA` | `/data` | Dictionary and audio cache |
 | `CARD_GENERATOR_DICTIONARY_URL` | kaikki.org German extract | Empty disables the automatic build |
+| `CARD_GENERATOR_DICTIONARY_URL_ES` | kaikki.org Spanish extract | Empty disables the Spanish build |
 
 ## Note types
 
@@ -151,6 +185,8 @@ Note types are created on the first save, through anki-manager's
 save after a restart, and they sync incrementally. Changing a note type's **fields**
 or **card list** is refused, because it would force a full sync on every device. Make a
 new note type instead.
+Spanish definitions in `spanish.py` follow the same update rules and leave German note
+types intact.
 
 ## Deployment
 
