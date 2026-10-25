@@ -11,7 +11,6 @@ SOURCE_URL = "https://kaikki.org/dictionary/Spanish/kaikki.org-dictionary-Spanis
 SCHEMA_VERSION = 2
 
 GENDER_OF = {"el": "m", "la": "f"}
-GENDER_NAME = {"m": "masculine", "f": "feminine"}
 ARTICLES = {"m": "el", "f": "la", "m-p": "los", "f-p": "las"}
 GENDER_TAGS = {"masculine": "m", "feminine": "f"}
 
@@ -108,12 +107,7 @@ irregularity), or "".
 """ + tagging.prompt_text()
 
 SCHEMA: dict = {
-    "type": "object",
-    "additionalProperties": False,
-    "required": [
-        "kind", "lemma", "article", "plural", "part_of_speech", "meaning", "gender_rule",
-        "present", "preterite", "perfect", "governs", "examples", "note", "input_note", "level", "topic",
-    ],
+    **german.SCHEMA,
     "properties": {
         **german.SCHEMA["properties"],
         "article": {"type": "string", "enum": ["el", "la", "los", "las", ""]},
@@ -140,19 +134,7 @@ Return the corrected fields (unchanged where they were fine) and, in changes, on
 English line per fix. If nothing needed fixing, changes is an empty list.
 """
 
-REVIEW_SCHEMA: dict = {
-    "type": "object",
-    "additionalProperties": False,
-    "required": ["lemma", "meaning", "examples", "note", "changes"],
-    "properties": {
-        "lemma": {"type": "string"},
-        "meaning": {"type": "string"},
-        "examples": SCHEMA["properties"]["examples"],
-        "note": {"type": "string"},
-        "changes": {"type": "array", "items": {"type": "string"}},
-    },
-}
-
+REVIEW_SCHEMA = german.REVIEW_SCHEMA
 user_message = german.user_message
 review_message = german.review_message
 apply_review = german.apply_review
@@ -306,12 +288,8 @@ EXACT_FIELDS = ["Palabra", "Infinitivo", "Frase", "Wort_ES", "base_s"]
 LOOSE_FIELDS = ["es_word", "full_s"]
 
 
-def _escape(value: str) -> str:
-    return re.sub(r'([\\"*_])', r"\\\1", value)
-
-
 def duplicate_query(lemma: str) -> str:
-    value = _escape(lemma.strip())
+    value = german._escape(lemma.strip())
     terms = [f'"{field}:{value}"' for field in EXACT_FIELDS]
     for field in LOOSE_FIELDS:
         terms += [f'"{field}:{value}"', f'"{field}:{value},*"']
