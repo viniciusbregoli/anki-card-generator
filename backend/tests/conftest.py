@@ -9,7 +9,8 @@ import httpx
 import pytest
 from fastapi.testclient import TestClient
 
-from card_generator.api import Services, create_app
+from card_generator import spanish
+from card_generator.api import LanguageServices, Services, create_app
 from card_generator.clients import AnkiManager, Speech, TextModel
 from card_generator.dictionary import Dictionary, build
 
@@ -79,9 +80,11 @@ class FakeModel:
     def __init__(self) -> None:
         self.answer: dict = {}
         self.prompts: list[str] = []
+        self.requests: list[dict] = []
 
     def handler(self, request: httpx.Request) -> httpx.Response:
         body = json.loads(request.content)
+        self.requests.append(body)
         assert body["response_format"]["json_schema"]["strict"] is True
         self.prompts.append(body["messages"][1]["content"])
         return httpx.Response(200, json={"choices": [{"message": {"content": json.dumps(self.answer)}}]})
@@ -90,11 +93,13 @@ class FakeModel:
 class FakeSpeech:
     def __init__(self) -> None:
         self.spoken: list[str] = []
+        self.languages: list[str] = []
 
     def handler(self, request: httpx.Request) -> httpx.Response:
         body = json.loads(request.content)
-        assert body["model_id"] == "eleven_v4" and body["language_code"] == "de"
+        assert body["model_id"] == "eleven_v4" and body["language_code"] in ("de", "es")
         self.spoken.append(body["text"])
+        self.languages.append(body["language_code"])
         return httpx.Response(200, content=b"ID3fake-mp3:" + body["text"].encode())
 
 
@@ -113,6 +118,15 @@ def client(tmp_path: Path, dictionary: Dictionary, fakes):
         manager=AnkiManager("http://manager", client=httpx.Client(transport=httpx.MockTransport(manager.handler))),
         dictionary=dictionary,
         deck="German - Mine",
+    )
+    es_path = tmp_path / "es.sqlite"
+    with open(FIXTURES / "kaikki-spanish-sample.jsonl", encoding="utf-8") as lines:
+        build(lines, es_path, spanish.parse_noun, spanish.parse_verb, spanish.SCHEMA_VERSION)
+    services.languages["es"] = LanguageServices(
+        speech=Speech("key", "spanish-voice", "eleven_v4", tmp_path / "audio",
+                      client=httpx.Client(transport=httpx.MockTransport(speech.handler))),
+        dictionary=Dictionary(es_path, spanish.parse_noun, spanish.parse_verb, spanish.SCHEMA_VERSION),
+        deck="Spanish - Mine",
     )
     app = create_app(services, static_dir=Path("/nonexistent"), build_dictionary=False)
     with TestClient(app, headers={"x-card-generator": "1"}) as c:
