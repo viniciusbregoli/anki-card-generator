@@ -6,6 +6,10 @@
   --color-der: oklch(0.55 0.2 260);
   --color-die: oklch(0.58 0.21 27);
   --color-das: oklch(0.6 0.16 150);
+  --color-el: var(--color-der);
+  --color-la: var(--color-die);
+  --color-los: var(--color-der);
+  --color-las: var(--color-die);
 }
 
 :root {

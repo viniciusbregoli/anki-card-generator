@@ -1,27 +1,16 @@
 import { useQuery } from '@tanstack/react-query'
 import { AlertTriangle, CheckCircle2, Copy, Info, Plus, Trash2 } from 'lucide-react'
-import { api, type Article, type Check, type Draft, type DraftResult, type Example, type Kind } from '../api'
+import { api, type Check, type Draft, type DraftResult, type Example, type Kind } from '../api'
+import {
+  ARTICLE_SELECTED,
+  ARTICLE_TEXT,
+  ARTICLES,
+  cardsFor,
+  dictionaryLinks,
+  KIND_LABELS,
+  LANGUAGE_NAMES,
+} from '../languages'
 import { Button, Field, inputClass, PlayButton } from './ui'
-
-export const KINDS: { value: Kind; label: string; cards: string[] }[] = [
-  { value: 'noun', label: 'Noun', cards: ['German → English', 'English → German', 'Gender'] },
-  { value: 'verb', label: 'Verb', cards: ['German → English', 'English → German'] },
-  { value: 'word', label: 'Other word', cards: ['German → English', 'English → German'] },
-  { value: 'phrase', label: 'Phrase', cards: ['German → English', 'English → German', 'Listening'] },
-]
-
-export const cardsFor = (kind: Kind) => KINDS.find((k) => k.value === kind)!.cards
-
-export const ARTICLE_TEXT: Record<Exclude<Article, ''>, string> = {
-  der: 'text-der',
-  die: 'text-die',
-  das: 'text-das',
-}
-const ARTICLE_SELECTED: Record<Exclude<Article, ''>, string> = {
-  der: 'bg-der text-white',
-  die: 'bg-die text-white',
-  das: 'bg-das text-white',
-}
 
 // Examples mark the target word with <b>; while editing it shows as *word*.
 const toEditable = (html: string) => html.replace(/<b>(.*?)<\/b>/g, '*$1*')
@@ -39,24 +28,6 @@ const withTag = (tags: string[], prefix: string, value: string) => [
   ...tags.filter((t) => !t.startsWith(`${prefix}::`)),
   ...(value ? [`${prefix}::${value}`] : []),
 ]
-
-/** Dictionary pages for the headword; the Anki cards get the same links (german.py). */
-export function dictionaryLinks(d: Draft): [string, string][] {
-  const full = d.lemma.replace(/<[^>]+>/g, '').trim()
-  const w = full.replace(/^sich /, '')
-  const vf = 'https://www.verbformen.com/'
-  const enc = encodeURIComponent
-  if (!full || d.kind === 'phrase') return []
-  return [
-    ['Wiktionary', `https://en.wiktionary.org/wiki/${enc(w.replace(/ /g, '_'))}#German`],
-    ...(d.kind === 'verb' ? [['Conjugation', `${vf}conjugation/?w=${enc(full)}`] as [string, string]] : []),
-    ...(d.kind === 'noun' ? [['Declension', `${vf}declension/nouns/?w=${enc(w)}`] as [string, string]] : []),
-    ...(d.kind === 'word' && /adjecti/i.test(d.part_of_speech)
-      ? [['Declension', `${vf}declension/adjectives/?w=${enc(w)}`] as [string, string]]
-      : []),
-    ['dict.cc', `https://www.dict.cc/?s=${enc(full)}`],
-  ]
-}
 
 /** The editable body of one draft. */
 export function DraftFields({
@@ -91,14 +62,16 @@ export function DraftFields({
             onChange={(e) => set('kind', e.target.value as Kind)}
             className={`${inputClass.replace('w-full ', '')} w-40`}
           >
-            {KINDS.map((k) => (
-              <option key={k.value} value={k.value}>
-                {k.label}
+            {(Object.entries(KIND_LABELS) as [Kind, string][]).map(([kind, label]) => (
+              <option key={kind} value={kind}>
+                {label}
               </option>
             ))}
           </select>
         </Field>
-        <p className="pb-1.5 text-xs text-zinc-500 dark:text-zinc-400">Makes: {cardsFor(draft.kind).join(' · ')}</p>
+        <p className="pb-1.5 text-xs text-zinc-500 dark:text-zinc-400">
+          Makes: {cardsFor(draft.kind, draft.language).join(' · ')}
+        </p>
         {dictionaryLinks(draft).length > 0 && (
           <p className="ml-auto pb-1.5 text-xs text-zinc-500 dark:text-zinc-400">
             Look up:{' '}
@@ -123,13 +96,26 @@ export function DraftFields({
         <div className="grid gap-3 sm:grid-cols-[auto_1fr_1fr]">
           <Field label="Article">
             <div role="radiogroup" aria-label="Article" className="flex gap-1">
-              {(['der', 'die', 'das'] as const).map((a) => (
+              {ARTICLES[draft.language].map((a, index) => (
                 <button
                   key={a}
                   type="button"
                   role="radio"
+                  aria-label={a}
                   aria-checked={draft.article === a}
+                  tabIndex={draft.article === a || (!draft.article && index === 0) ? 0 : -1}
                   onClick={() => set('article', a)}
+                  onKeyDown={(e) => {
+                    const articles = ARTICLES[draft.language]
+                    const index = articles.indexOf(a)
+                    const next = e.key === 'ArrowRight' || e.key === 'ArrowDown' ? (index + 1) % articles.length
+                      : e.key === 'ArrowLeft' || e.key === 'ArrowUp' ? (index + articles.length - 1) % articles.length
+                      : e.key === 'Home' ? 0 : e.key === 'End' ? articles.length - 1 : null
+                    if (next === null) return
+                    e.preventDefault()
+                    set('article', articles[next])
+                    e.currentTarget.parentElement?.querySelectorAll('button')[next]?.focus()
+                  }}
                   className={`rounded-md px-3 py-1.5 text-sm font-semibold ring-1 transition-colors ${
                     draft.article === a
                       ? `${ARTICLE_SELECTED[a]} ring-transparent`
@@ -144,7 +130,7 @@ export function DraftFields({
           <Field label="Noun">
             <input className={inputClass} value={draft.lemma} onChange={(e) => set('lemma', e.target.value)} />
           </Field>
-          <Field label="Plural (without die)">
+          <Field label={draft.language === 'de' ? 'Plural (without die)' : 'Plural (without article)'}>
             <input className={inputClass} value={draft.plural} onChange={(e) => set('plural', e.target.value)} />
           </Field>
         </div>
@@ -155,23 +141,23 @@ export function DraftFields({
           <Field label="Infinitive">
             <input className={inputClass} value={draft.lemma} onChange={(e) => set('lemma', e.target.value)} />
           </Field>
-          <Field label="Case or preposition">
+          <Field label={draft.language === 'de' ? 'Case or preposition' : 'Preposition'}>
             <input
               className={inputClass}
               value={draft.governs}
-              placeholder="auf + Akk."
+              placeholder={draft.language === 'de' ? 'auf + Akk.' : 'con + noun'}
               onChange={(e) => set('governs', e.target.value)}
             />
           </Field>
-          <Field label="Present (er/sie/es)">
-            <input className={inputClass} value={draft.present} onChange={(e) => set('present', e.target.value)} />
-          </Field>
-          <Field label="Preterite (er/sie/es)">
-            <input className={inputClass} value={draft.preterite} onChange={(e) => set('preterite', e.target.value)} />
-          </Field>
-          <Field label="Perfect (er/sie/es)" className="sm:col-span-2">
-            <input className={inputClass} value={draft.perfect} onChange={(e) => set('perfect', e.target.value)} />
-          </Field>
+          {(['Present', 'Preterite', 'Perfect'] as const).map((label) => {
+            const key = label.toLowerCase() as 'present' | 'preterite' | 'perfect'
+            const person = draft.language === 'de' ? 'er/sie/es' : 'él/ella/usted'
+            return (
+              <Field key={key} label={`${label} (${person})`} className={key === 'perfect' ? 'sm:col-span-2' : ''}>
+                <input className={inputClass} value={draft[key]} onChange={(e) => set(key, e.target.value)} />
+              </Field>
+            )
+          })}
         </div>
       )}
 
@@ -191,7 +177,7 @@ export function DraftFields({
       )}
 
       {draft.kind === 'phrase' && (
-        <Field label="German">
+        <Field label={LANGUAGE_NAMES[draft.language]}>
           <input className={inputClass} value={draft.lemma} onChange={(e) => set('lemma', e.target.value)} />
         </Field>
       )}
@@ -220,7 +206,8 @@ export function DraftFields({
             <div key={i} className="flex items-start gap-1">
               <div className="grid min-w-0 flex-1 gap-1">
                 <input
-                  aria-label={`Example ${i + 1}, German`}
+                  aria-label={`Example ${i + 1}, ${LANGUAGE_NAMES[draft.language]}`}
+                  lang={draft.language}
                   className={inputClass}
                   value={toEditable(ex.de)}
                   onChange={(e) => setExample(i, { de: fromEditable(e.target.value) })}
@@ -232,7 +219,7 @@ export function DraftFields({
                   onChange={(e) => setExample(i, { en: e.target.value })}
                 />
               </div>
-              <PlayButton text={ex.de} />
+              <PlayButton text={ex.de} language={draft.language} />
               <button
                 type="button"
                 aria-label={`Remove example ${i + 1}`}
