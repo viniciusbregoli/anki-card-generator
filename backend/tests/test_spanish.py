@@ -9,6 +9,7 @@ import pytest
 from card_generator import german, spanish
 from card_generator.dictionary import Dictionary, build
 from card_generator.german import Draft
+from conftest import spanish_answer as model_answer
 
 FIXTURES = Path(__file__).parent / "fixtures"
 
@@ -29,17 +30,6 @@ def noun(lemma: str, article: str, plural: str = "", rule: str = "") -> Draft:
 
 def levels(checks):
     return [check.level for check in checks]
-
-
-def model_answer(**overrides) -> dict:
-    answer = {
-        "kind": "noun", "lemma": "casa", "article": "la", "plural": "casas",
-        "part_of_speech": "", "meaning": "house", "gender_rule": "",
-        "present": "", "preterite": "", "perfect": "", "governs": "",
-        "examples": [{"de": "La <b>casa</b> es grande.", "en": "The house is big."}],
-        "note": "", "input_note": "", "level": "A2", "topic": "home",
-    }
-    return {**answer, **overrides}
 
 
 def test_dictionary_uses_spanish_parsers_and_schema(dictionary):

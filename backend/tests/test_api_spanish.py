@@ -7,20 +7,7 @@ import pytest
 
 from card_generator import spanish
 from card_generator.api import create_app, services_from_env
-from conftest import answer
-
-
-def spanish_answer(**overrides):
-    return answer(
-        **{
-            "lemma": "casa", "article": "la", "plural": "casas", "meaning": "house",
-            "examples": [
-                {"de": "La <b>casa</b> es grande.", "en": "The house is big."},
-                {"de": "Voy a <b>casa</b>.", "en": "I'm going home."},
-            ],
-            **overrides,
-        }
-    )
+from conftest import answer, spanish_answer
 
 
 def test_status_has_independent_language_services(client):

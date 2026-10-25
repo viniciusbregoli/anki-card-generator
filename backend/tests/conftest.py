@@ -146,3 +146,12 @@ def answer(**overrides) -> dict:
         "note": "", "input_note": "", "level": "A2", "topic": "shopping-money",
     }
     return {**base, **overrides}
+
+
+def spanish_answer(**overrides) -> dict:
+    return answer(**{
+        "lemma": "casa", "article": "la", "plural": "casas", "meaning": "house",
+        "examples": [{"de": "La <b>casa</b> es grande.", "en": "The house is big."},
+                     {"de": "Voy a <b>casa</b>.", "en": "I'm going home."}],
+        **overrides,
+    })
